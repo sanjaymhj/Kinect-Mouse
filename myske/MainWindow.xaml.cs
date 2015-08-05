@@ -6,6 +6,14 @@ namespace myske
     using System.Windows;
     using System.Windows.Media;
     using Microsoft.Kinect;
+    using System.Diagnostics;
+    using System.Runtime.InteropServices;
+
+    using System.Windows.Media.Imaging;
+   // using System.Windows.Forms.SystemInformation;
+    using System.Windows.Forms.ComponentModel;
+    
+
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
@@ -25,9 +33,36 @@ namespace myske
         private KinectSensor sensor;
         private DrawingGroup drawingGroup;
         private DrawingImage imageSource;
+        /// Bitmap that will hold color information
+        /// </summary>
+        private WriteableBitmap colorBitmap;
 
-       
+        /// <summary>
+        /// Intermediate storage for the depth data received from the camera
+        /// </summary>
+        private DepthImagePixel[] depthPixels;
 
+        /// <summary>
+        /// Intermediate storage for the depth data converted to color
+        /// </summary>
+        private byte[] colorPixels;
+
+
+
+        [DllImport("mouseControls.dll", CallingConvention = CallingConvention.Cdecl)]
+        public extern static bool move_cursorTo(int x, int y);
+
+        [DllImport("mouseControls.dll", CallingConvention = CallingConvention.Cdecl)]
+        public extern static bool click_Left_down(int x, int y);
+
+        [DllImport("mouseControls.dll", CallingConvention = CallingConvention.Cdecl)]
+        public extern static bool click_Right_up(int x, int y);
+
+        [DllImport("mouseControls.dll", CallingConvention = CallingConvention.Cdecl)]
+        public extern static bool click_Left_up(int x, int y);
+
+        [DllImport("mouseControls.dll", CallingConvention = CallingConvention.Cdecl)]
+        public extern static bool click_Right_down(int x, int y);
         public MainWindow()
         {
             InitializeComponent();
@@ -67,6 +102,26 @@ namespace myske
 
             if (null != this.sensor)
             {
+                this.sensor.DepthStream.Enable(DepthImageFormat.Resolution640x480Fps30);
+
+                // Allocate space to put the depth pixels we'll receive
+                this.depthPixels = new DepthImagePixel[this.sensor.DepthStream.FramePixelDataLength];
+
+                // Allocate space to put the color pixels we'll create
+                this.colorPixels = new byte[this.sensor.DepthStream.FramePixelDataLength * sizeof(int)];
+
+                // This is the bitmap we'll display on-screen
+                this.colorBitmap = new WriteableBitmap(this.sensor.DepthStream.FrameWidth, this.sensor.DepthStream.FrameHeight, 96.0, 96.0, PixelFormats.Bgr32, null);
+
+                // Set the image we display to point to the bitmap where we'll put the image data
+                this.Image.Source = this.colorBitmap;
+
+                // Add an event handler to be called whenever there is new depth frame data
+                this.sensor.DepthFrameReady += this.SensorDepthFrameReady;
+
+
+
+
                 // Turn on the skeleton stream to receive skeleton frames
                 this.sensor.SkeletonStream.Enable();
 
@@ -87,6 +142,7 @@ namespace myske
             if (null == this.sensor)
             {
                 MessageBox.Show("No kinect Connected");
+                System.Windows.Forms.Application.Exit();
             }
         }
 
@@ -101,12 +157,16 @@ namespace myske
                     skeletons = new Skeleton[skeletonFrame.SkeletonArrayLength];
                     skeletonFrame.CopySkeletonDataTo(skeletons);
                 }
+                //else
+                //{
+                //    MessageBox.Show("no person in view");
+                //}
             }
 
             using (DrawingContext dc = this.drawingGroup.Open())
             {
                 // Draw a transparent background to set the render size
-                dc.DrawRectangle(null, null, new Rect(0.0, 0.0, RenderWidth, RenderHeight));
+                //dc.DrawRectangle(Brushes.Black, null, new Rect(0.0, 0.0, RenderWidth, RenderHeight));
 
                 if (skeletons.Length != 0)
                 {
@@ -140,6 +200,13 @@ namespace myske
             // Convert point to depth space.  
             // We are not using depth directly, but we do want the points in our 640x480 output resolution.
             DepthImagePoint depthPoint = this.sensor.CoordinateMapper.MapSkeletonPointToDepthPoint(skelpoint, DepthImageFormat.Resolution640x480Fps30);
+            
+            double mapped_x = (depthPoint.X-100) / Image.Width * 1366.0;//static screen size
+            double mapped_y = (depthPoint.Y-100) / Image.Height * 768.0;
+            label.Content = (int)depthPoint.X + " , " + (int)depthPoint.Y;
+            screen_coordinate.Content =(int) mapped_x+ " , " + (int)mapped_y;//+" , "+skelpoint.Z;
+            
+            bool a = move_cursorTo((int) mapped_x, (int ) mapped_y);//move the mouse cursor
             return new Point(depthPoint.X, depthPoint.Y);
         }
 
@@ -176,21 +243,23 @@ namespace myske
 
             // Render Joints
             Joint left_joint = skeleton.Joints[JointType.HandLeft];
+            //JointType joint_t=new JointType.HandLeft;
             Brush drawBrush = null;
+            
             if (left_joint.TrackingState == JointTrackingState.Tracked)
-                               {
-                                  drawBrush = this.trackedJointBrush;
-             }
-                            else if (left_joint.TrackingState == JointTrackingState.Inferred)
-                               {
-                                  drawBrush = this.inferredJointBrush;
-                             }
+            {
+                drawBrush = this.trackedJointBrush;
+            }
+            else if (left_joint.TrackingState == JointTrackingState.Inferred)
+            {
+                drawBrush = this.inferredJointBrush;
+            }
             if (drawBrush != null)
             {
                 drawingContext.DrawEllipse(drawBrush, null, this.SkeletonPointToScreen(left_joint.Position), JointThickness, JointThickness);
-
-                label.Content = left_joint.Position.X + "   ,   " + left_joint.Position.Y;
-
+                //Point a = left_joint.Position.ToString;
+                //label.Content = left_joint.Position.X.ToString() + "   ,   " + left_joint.Position.Y;
+                //Trace.WriteLine(a);
             }
             //foreach (Joint joint in skeleton.Joints)
             //{
@@ -275,6 +344,73 @@ namespace myske
                     Brushes.Red,
                     null,
                     new Rect(RenderWidth - ClipBoundsThickness, 0, ClipBoundsThickness, RenderHeight));
+            }
+        }
+        private void SensorDepthFrameReady(object sender, DepthImageFrameReadyEventArgs e)
+        {
+            using (DepthImageFrame depthFrame = e.OpenDepthImageFrame())
+            {
+                if (depthFrame != null)
+                {
+                    // Copy the pixel data from the image to a temporary array
+                    depthFrame.CopyDepthImagePixelDataTo(this.depthPixels);
+
+                    // Get the min and max reliable depth for the current frame
+                    int minDepth = depthFrame.MinDepth;
+                    int maxDepth = depthFrame.MaxDepth;
+                    mm.Content = minDepth+","+maxDepth;
+                    // Convert the depth to RGB
+                    int colorPixelIndex = 0;
+                    for (int i = 0; i < this.depthPixels.Length; ++i)
+                    {
+                        // Get the depth for this pixel
+                        short depth = depthPixels[i].Depth;
+
+                        // To convert to a byte, we're discarding the most-significant
+                        // rather than least-significant bits.
+                        // We're preserving detail, although the intensity will "wrap."
+                        // Values outside the reliable depth range are mapped to 0 (black).
+
+                        // Note: Using conditionals in this loop could degrade performance.
+                        // Consider using a lookup table instead when writing production code.
+                        // See the KinectDepthViewer class used by the KinectExplorer sample
+                        // for a lookup table example.
+                        //byte intensity = (byte)(depth >= minDepth && depth <= maxDepth ? 1 : 0);
+                        //int x = 10;
+                        byte intensity;
+
+                        if(depth>=maxDepth-1000 && depth<=maxDepth)
+                        {
+                            intensity =(byte) depth;    
+                        }
+                        else
+                        {
+                            intensity = 0;
+                        }
+                        //byte intensity = (byte)(depth >=maxDepth-1000 && depth <=maxDepth ? depth :0);
+
+                        // Write out blue byte
+                        this.colorPixels[colorPixelIndex++] = intensity;
+
+                        // Write out green byte
+                        this.colorPixels[colorPixelIndex++] = intensity;
+
+                        // Write out red byte                        
+                        this.colorPixels[colorPixelIndex++] = intensity;
+
+                        // We're outputting BGR, the last byte in the 32 bits is unused so skip it
+                        // If we were outputting BGRA, we would write alpha here.
+                        ++colorPixelIndex;
+                    }
+
+                    // Write the pixel data into our bitmap
+                    this.colorBitmap.WritePixels(
+                        new Int32Rect(0, 0, this.colorBitmap.PixelWidth, this.colorBitmap.PixelHeight),
+                        this.colorPixels,
+                        this.colorBitmap.PixelWidth * sizeof(int),
+                        0);
+                    Image.Source = colorBitmap;
+                }
             }
         }
     }
